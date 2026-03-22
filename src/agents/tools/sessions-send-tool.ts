@@ -84,7 +84,7 @@ export function createSessionsSendTool(opts?: {
     label: "Session Send",
     name: "sessions_send",
     description:
-      "Send a message into another session. Use sessionKey or label to identify the target.",
+      "Send a message into another session. Use sessionKey (preferred) to identify the target. sessionKey format: agent:AGENT_ID:channel:CHANNEL_ID or agent:AGENT_ID:main for main session.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
