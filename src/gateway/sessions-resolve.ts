@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionStore, updateSessionStore } from "../config/sessions.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   ErrorCodes,
@@ -111,7 +113,30 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+  // When resolving by label without explicit agentId, load all agents' stores
+  // to support cross-agent lookups (e.g., pm agent finding rd agent's session).
+  let storePath: string;
+  let store: Record<string, SessionEntry>;
+  if (!p.agentId && !p.spawnedBy) {
+    // Load all agents' session stores for cross-agent label lookup
+    const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
+    const combined: Record<string, SessionEntry> = {};
+    for (const target of targets) {
+      const agentStore = loadSessionStore(target.storePath);
+      for (const [key, entry] of Object.entries(agentStore)) {
+        // Canonicalize key with agent prefix to avoid collisions
+        const canonicalKey = `${target.agentId}:${key}`;
+        combined[canonicalKey] = entry;
+      }
+    }
+    storePath = "(multiple)";
+    store = combined;
+  } else {
+    const result = loadCombinedSessionStoreForGateway(cfg);
+    storePath = result.storePath;
+    store = result.store;
+  }
+
   const list = listSessionsFromStore({
     cfg,
     storePath,
