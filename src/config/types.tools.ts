@@ -556,6 +556,20 @@ export type ToolsConfig = {
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
   };
+  /** Sessions send tool (A2A) configuration. */
+  sessionsSend?: {
+    /** Send mode: sync (wait for reply), async (fire-and-forget), or auto (queue when busy). Default: "auto". */
+    mode?: "sync" | "async" | "auto";
+    /** Timeout in seconds for sync mode. Default: 30. */
+    syncTimeoutSeconds?: number;
+    /** Queue configuration for async/auto modes. */
+    queue?: {
+      mode?: "steer" | "followup" | "collect" | "steer-backlog" | "queue" | "interrupt";
+      debounceMs?: number;
+      cap?: number;
+      dropPolicy?: "old" | "new" | "summarize";
+    };
+  };
   /**
    * Session tool visibility controls which sessions can be targeted by session tools
    * (sessions_list, sessions_history, sessions_send).

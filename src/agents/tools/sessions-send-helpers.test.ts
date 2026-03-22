@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
+import {
+  resolveAnnounceTargetFromKey,
+  resolveSessionsSendMode,
+  resolveSyncTimeoutSeconds,
+  resolveSessionsSendQueueSettings,
+} from "./sessions-send-helpers.js";
 
 describe("resolveAnnounceTargetFromKey", () => {
   beforeEach(() => {
@@ -96,5 +101,115 @@ describe("resolveAnnounceTargetFromKey", () => {
       to: "-100123",
       threadId: "99",
     });
+  });
+});
+
+describe("resolveSessionsSendMode", () => {
+  it("returns sync when explicitly set", () => {
+    expect(resolveSessionsSendMode({ tools: { sessionsSend: { mode: "sync" } } } as unknown)).toBe(
+      "sync",
+    );
+    expect(resolveSessionsSendMode({ tools: { sessionsSend: { mode: "async" } } } as unknown)).toBe(
+      "async",
+    );
+    expect(resolveSessionsSendMode({ tools: { sessionsSend: { mode: "auto" } } } as unknown)).toBe(
+      "auto",
+    );
+  });
+
+  it("returns auto as default", () => {
+    expect(resolveSessionsSendMode(undefined)).toBe("auto");
+    expect(resolveSessionsSendMode({} as unknown)).toBe("auto");
+    expect(resolveSessionsSendMode({ tools: {} } as unknown)).toBe("auto");
+    expect(resolveSessionsSendMode({ tools: { sessionsSend: {} } } as unknown)).toBe("auto");
+    expect(
+      resolveSessionsSendMode({ tools: { sessionsSend: { mode: "invalid" } } } as unknown),
+    ).toBe("auto");
+  });
+});
+
+describe("resolveSyncTimeoutSeconds", () => {
+  it("returns configured value when set", () => {
+    expect(
+      resolveSyncTimeoutSeconds({ tools: { sessionsSend: { syncTimeoutSeconds: 60 } } } as unknown),
+    ).toBe(60);
+    expect(
+      resolveSyncTimeoutSeconds({ tools: { sessionsSend: { syncTimeoutSeconds: 0 } } } as unknown),
+    ).toBe(0);
+    expect(
+      resolveSyncTimeoutSeconds({
+        tools: { sessionsSend: { syncTimeoutSeconds: 120 } },
+      } as unknown),
+    ).toBe(120);
+  });
+
+  it("returns default 30 when not configured", () => {
+    expect(resolveSyncTimeoutSeconds(undefined)).toBe(30);
+    expect(resolveSyncTimeoutSeconds({} as unknown)).toBe(30);
+    expect(resolveSyncTimeoutSeconds({ tools: {} } as unknown)).toBe(30);
+  });
+
+  it("handles invalid values gracefully", () => {
+    expect(
+      resolveSyncTimeoutSeconds({ tools: { sessionsSend: { syncTimeoutSeconds: -5 } } } as unknown),
+    ).toBe(0);
+    expect(resolveSyncTimeoutSeconds({ tools: { syncTimeoutSeconds: 60 } } as unknown)).toBe(30);
+  });
+});
+
+describe("resolveSessionsSendQueueSettings", () => {
+  it("returns undefined when not configured", () => {
+    expect(resolveSessionsSendQueueSettings(undefined)).toBeUndefined();
+    expect(resolveSessionsSendQueueSettings({} as unknown)).toBeUndefined();
+    expect(resolveSessionsSendQueueSettings({ tools: {} } as unknown)).toBeUndefined();
+  });
+
+  it("returns queue settings when configured", () => {
+    const result = resolveSessionsSendQueueSettings({
+      tools: {
+        sessionsSend: { queue: { mode: "queue", debounceMs: 500, cap: 5, dropPolicy: "old" } },
+      },
+    } as unknown);
+    expect(result).toEqual({
+      mode: "queue",
+      debounceMs: 500,
+      cap: 5,
+      dropPolicy: "old",
+    });
+  });
+
+  it("applies defaults for missing fields", () => {
+    const result = resolveSessionsSendQueueSettings({
+      tools: { sessionsSend: { queue: {} } },
+    } as unknown);
+    expect(result).toEqual({
+      mode: "followup",
+      debounceMs: 1000,
+      cap: 10,
+      dropPolicy: undefined,
+    });
+  });
+
+  it("validates mode values", () => {
+    const modes = [
+      "steer",
+      "followup",
+      "collect",
+      "steer-backlog",
+      "steer+backlog",
+      "queue",
+      "interrupt",
+    ] as const;
+    for (const mode of modes) {
+      const result = resolveSessionsSendQueueSettings({
+        tools: { sessionsSend: { queue: { mode } } },
+      } as unknown);
+      expect(result?.mode).toBe(mode);
+    }
+
+    const invalid = resolveSessionsSendQueueSettings({
+      tools: { sessionsSend: { queue: { mode: "invalid" } } },
+    } as unknown);
+    expect(invalid?.mode).toBe("followup");
   });
 });

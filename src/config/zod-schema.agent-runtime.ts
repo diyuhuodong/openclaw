@@ -845,6 +845,24 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    sessionsSend: z
+      .object({
+        mode: z.enum(["sync", "async", "auto"]).optional(),
+        syncTimeoutSeconds: z.number().int().min(0).optional(),
+        queue: z
+          .object({
+            mode: z
+              .enum(["steer", "followup", "collect", "steer-backlog", "queue", "interrupt"])
+              .optional(),
+            debounceMs: z.number().int().min(0).optional(),
+            cap: z.number().int().min(0).optional(),
+            dropPolicy: z.enum(["old", "new", "summarize"]).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     elevated: z
       .object({
         enabled: z.boolean().optional(),

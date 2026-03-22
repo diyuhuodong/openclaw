@@ -9,6 +9,8 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { isEmbeddedPiRunActive } from "../pi-embedded-runner/runs.js";
+import { enqueueAnnounce, type AnnounceQueueItem } from "../subagent-announce-queue.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -21,7 +23,14 @@ import {
   resolveVisibleSessionReference,
   stripToolMessages,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentMessageContext,
+  resolvePingPongTurns,
+  resolveSessionsSendMode,
+  resolveSessionsSendQueueSettings,
+  resolveSyncTimeoutSeconds,
+  type SessionsSendMode,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -29,6 +38,9 @@ const SessionsSendToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
+  mode: Type.Optional(
+    Type.Union([Type.Literal("sync"), Type.Literal("async"), Type.Literal("auto")]),
+  ),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
@@ -214,12 +226,23 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutSeconds =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
+
+      const modeParam = params.mode as string | undefined;
+      const mode: SessionsSendMode =
+        modeParam === "sync" || modeParam === "async" || modeParam === "auto"
+          ? modeParam
+          : resolveSessionsSendMode(cfg);
+
+      console.log("[A2A DEBUG] mode:", mode, "cfg mode:", cfg?.tools?.sessionsSend?.mode);
+
+      const timeoutParam = params.timeoutSeconds;
+      const explicitTimeout = typeof timeoutParam === "number" && Number.isFinite(timeoutParam);
+      const timeoutSeconds = explicitTimeout
+        ? Math.max(0, Math.floor(timeoutParam))
+        : resolveSyncTimeoutSeconds(cfg);
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const visibilityGuard = await createSessionVisibilityGuard({
@@ -276,7 +299,10 @@ export function createSessionsSendTool(opts?: {
         });
       };
 
-      if (timeoutSeconds === 0) {
+      const queueSettings = resolveSessionsSendQueueSettings(cfg);
+      const isTargetBusy = isEmbeddedPiRunActive(resolvedKey);
+
+      if (mode === "async") {
         const start = await startAgentRun({
           runId,
           sendParams,
@@ -295,6 +321,41 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
+      if (mode === "auto" && isTargetBusy && queueSettings) {
+        const queueKey = `a2a:${resolvedKey}`;
+        const queueItem: AnnounceQueueItem = {
+          prompt: message,
+          enqueuedAt: Date.now(),
+          sessionKey: resolvedKey,
+          sourceSessionKey: opts?.agentSessionKey,
+          sourceChannel: opts?.agentChannel,
+          sourceTool: "sessions_send",
+        };
+        enqueueAnnounce({
+          key: queueKey,
+          item: queueItem,
+          settings: queueSettings,
+          send: async (item) => {
+            const itemIdemKey = crypto.randomUUID();
+            await callGateway({
+              method: "agent",
+              params: {
+                ...sendParams,
+                message: item.prompt,
+                idempotencyKey: itemIdemKey,
+              },
+              timeoutMs: 10_000,
+            });
+          },
+        });
+        return jsonResult({
+          runId,
+          status: "queued",
+          sessionKey: displayKey,
+          delivery: { ...delivery, status: "queued" },
+        });
+      }
+
       const start = await startAgentRun({
         runId,
         sendParams,
@@ -304,6 +365,16 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+
+      if (timeoutSeconds === 0) {
+        startA2AFlow(undefined, runId);
+        return jsonResult({
+          runId,
+          status: "accepted",
+          sessionKey: displayKey,
+          delivery,
+        });
+      }
 
       let waitStatus: string | undefined;
       let waitError: string | undefined;

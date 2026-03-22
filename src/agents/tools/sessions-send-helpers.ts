@@ -4,6 +4,8 @@ import {
 } from "../../channels/plugins/index.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { QueueMode, QueueDropPolicy } from "../../config/types.queue.js";
+import type { AnnounceQueueSettings } from "../subagent-announce-queue.js";
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
 const REPLY_SKIP_TOKEN = "REPLY_SKIP";
@@ -156,4 +158,46 @@ export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   }
   const rounded = Math.floor(raw);
   return Math.max(0, Math.min(MAX_PING_PONG_TURNS, rounded));
+}
+
+const DEFAULT_SYNC_TIMEOUT_SECONDS = 30;
+
+export type SessionsSendMode = "sync" | "async" | "auto";
+
+export function resolveSessionsSendMode(cfg?: unknown): SessionsSendMode {
+  const raw = (cfg as OpenClawConfig | undefined)?.tools?.sessionsSend?.mode;
+  if (raw === "sync" || raw === "async" || raw === "auto") {
+    return raw;
+  }
+  return "auto";
+}
+
+export function resolveSyncTimeoutSeconds(cfg?: unknown): number {
+  const raw = (cfg as OpenClawConfig | undefined)?.tools?.sessionsSend?.syncTimeoutSeconds;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.max(0, Math.floor(raw));
+  }
+  return DEFAULT_SYNC_TIMEOUT_SECONDS;
+}
+
+export function resolveSessionsSendQueueSettings(cfg?: unknown): AnnounceQueueSettings | undefined {
+  const queue = (cfg as OpenClawConfig | undefined)?.tools?.sessionsSend?.queue;
+  if (!queue) {
+    return undefined;
+  }
+  const mode: QueueMode =
+    queue.mode === "steer" ||
+    queue.mode === "followup" ||
+    queue.mode === "collect" ||
+    queue.mode === "steer-backlog" ||
+    queue.mode === "queue" ||
+    queue.mode === "interrupt"
+      ? queue.mode
+      : "followup";
+  return {
+    mode,
+    debounceMs: typeof queue.debounceMs === "number" ? Math.max(0, queue.debounceMs) : 1000,
+    cap: typeof queue.cap === "number" && queue.cap > 0 ? Math.floor(queue.cap) : 10,
+    dropPolicy: queue.dropPolicy as QueueDropPolicy | undefined,
+  };
 }
