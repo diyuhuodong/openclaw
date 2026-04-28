@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logInfo } from "../../logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
@@ -38,23 +39,38 @@ export async function runSessionsSendA2AFlow(params: {
   waitRunId?: string;
 }) {
   const runContextId = params.waitRunId ?? "unknown";
+  const requesterLabel = params.requesterSessionKey ?? "unknown";
+  const targetLabel = params.targetSessionKey ?? "unknown";
+  logInfo(
+    `[sessions_send_a2a] runId=${runContextId} ${requesterLabel} → ${targetLabel}: ${params.message.slice(0, 100)}`,
+  );
   try {
     let primaryReply = params.roundOneReply;
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
+      const waitMs = Math.min(params.announceTimeoutMs, 60_000);
+      logInfo(
+        `[sessions_send_a2a] runId=${params.waitRunId} ${requesterLabel} → ${targetLabel} wait: timeoutMs=${waitMs}`,
+      );
       const wait = await waitForAgentRun({
         runId: params.waitRunId,
-        timeoutMs: Math.min(params.announceTimeoutMs, 60_000),
+        timeoutMs: waitMs,
         callGateway: sessionsSendA2ADeps.callGateway,
       });
       if (wait.status === "ok") {
+        logInfo(`[sessions_send_a2a] runId=${params.waitRunId} wait success`);
         primaryReply = await readLatestAssistantReply({
           sessionKey: params.targetSessionKey,
         });
         latestReply = primaryReply;
+      } else {
+        logInfo(
+          `[sessions_send_a2a] runId=${params.waitRunId} wait failed: status=${wait?.status}`,
+        );
       }
     }
     if (!latestReply) {
+      logInfo(`[sessions_send_a2a] runId=${runContextId} no reply, aborting`);
       return;
     }
 
@@ -75,6 +91,9 @@ export async function runSessionsSendA2AFlow(params: {
       for (let turn = 1; turn <= params.maxPingPongTurns; turn += 1) {
         const currentRole =
           currentSessionKey === params.requesterSessionKey ? "requester" : "target";
+        logInfo(
+          `[sessions_send_a2a] runId=${runContextId} pingpong turn ${turn}/${params.maxPingPongTurns}: ${currentSessionKey} → ${nextSessionKey}`,
+        );
         const replyPrompt = buildAgentToAgentReplyContext({
           requesterSessionKey: params.requesterSessionKey,
           requesterChannel: params.requesterChannel,
@@ -96,8 +115,14 @@ export async function runSessionsSendA2AFlow(params: {
           sourceTool: "sessions_send",
         });
         if (!replyText || isReplySkip(replyText)) {
+          logInfo(
+            `[sessions_send_a2a] PingPong turn ${turn}: ended, replyText=${replyText ? `"${replyText.slice(0, 50)}..."` : "empty"}, isReplySkip=${isReplySkip(replyText ?? "")}`,
+          );
           break;
         }
+        logInfo(
+          `[sessions_send_a2a] PingPong turn ${turn}: replied, replyPreview="${replyText.slice(0, 50)}..."`,
+        );
         latestReply = replyText;
         incomingMessage = replyText;
         const swap = currentSessionKey;
@@ -148,7 +173,13 @@ export async function runSessionsSendA2AFlow(params: {
         });
       }
     }
+    logInfo(
+      `[sessions_send_a2a] runId=${runContextId} Flow completed: ${requesterLabel} → ${targetLabel}`,
+    );
   } catch (err) {
+    logInfo(
+      `[sessions_send_a2a] runId=${runContextId} Flow error: ${requesterLabel} → ${targetLabel}, error=${formatErrorMessage(err)}`,
+    );
     log.warn("sessions_send announce flow failed", {
       runId: runContextId,
       error: formatErrorMessage(err),

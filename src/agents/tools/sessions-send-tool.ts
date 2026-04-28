@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logInfo } from "../../logger.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -228,10 +229,11 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
+      params.timeoutSeconds = 0;
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
+          : 0;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
@@ -303,6 +305,9 @@ export function createSessionsSendTool(opts?: {
         });
       };
 
+      logInfo(
+        `[sessions_send] ${opts?.agentSessionKey ?? "unknown"} → ${displayKey}: timeoutSeconds=${timeoutSeconds}, timeoutMs=${timeoutMs}, announceTimeoutMs=${announceTimeoutMs}`,
+      );
       if (timeoutSeconds === 0) {
         const start = await startAgentRun({
           callGateway: gatewayCall,
